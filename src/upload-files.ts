@@ -2,37 +2,44 @@ import multer, { diskStorage, StorageEngine, Multer, FileFilterCallback } from '
 import { Express, Request, Response } from 'express';
 import { BASE, UPLOAD_ROOT } from './config';
 import { LinxFileUploadRequest, LinxFileUploadResponse } from './LinxFileUpload';
-import { LinxFile } from './LinxFile';
+import { LinxFile, LinxLinkInfo } from './LinxLinkInfo';
 import hash from 'object-hash';
 
 console.log(`> [UPLOADER]: Using UPLOAD_ROOT: ${UPLOAD_ROOT}`);
 
-const storageEngine: StorageEngine = diskStorage({
-    destination: (req, file, callback) => {
-        callback(null, UPLOAD_ROOT);
-    },
-    filename: (req: LinxFileUploadRequest, file, callback) => {
-        callback(null, req.body.file_hash);
-    }
-});
+let fileHashMap = new Map<string, LinxFile>();
+let lookupKeyMap = new Map<string, LinxLinkInfo>();
 
-let fileHashSet = new Set<string>();
-let lookupMap = new Map<string, LinxFile>();
+function computeFileDestination(req, file) {
+    return UPLOAD_ROOT;
+}
+
+function computeFilename(req: LinxFileUploadRequest, file) {
+    return req.body.file_hash;
+}
+
+function computeFilePath(req: LinxFileUploadRequest, file) {
+    return `${computeFileDestination(req, file)}/${computeFilename(req, file)}`;
+}
 
 function computeLookupKey(file: LinxFile) {
     return hash(file);
 }
 
 function handleUploads(req: LinxFileUploadRequest, response: LinxFileUploadResponse) {
-    let linxFile: LinxFile = {
-        file_path: req.file.path,
-        file_size: req.file.size,
+    let linxFile: LinxFile = fileHashMap.get(req.body.file_hash);
+
+    let linkInfo: LinxLinkInfo = {
+        file_path: linxFile.file_path,
         file_hash: req.body.file_hash,
-        file_name: req.body.filename
+        file_name: req.body.filename,
     };
 
-    let lookupKey = computeLookupKey(linxFile);
-    lookupMap.set(computeLookupKey(linxFile), linxFile);
+    let lookupKey = computeLookupKey(linkInfo);
+    lookupKeyMap.set(lookupKey, linkInfo);
+
+    console.log(fileHashMap);
+    console.log(lookupKeyMap);
 
     response.send({link: `${BASE}/download/${lookupKey}`});
 }
@@ -40,17 +47,38 @@ function handleUploads(req: LinxFileUploadRequest, response: LinxFileUploadRespo
 function handleDownload(req: Request<{ lookupKey: string }>, response: Response) {
     let lookupKey = req.params.lookupKey;
 
-    if (!lookupMap.has(lookupKey))
+    if (!lookupKeyMap.has(lookupKey)) {
         response.send('Invalid key');
-    else {
-        let linxFile = lookupMap.get(lookupKey);
+    } else {
+        let linxFile = lookupKeyMap.get(lookupKey);
         response.download(linxFile.file_path, linxFile.file_name);
     }
 }
 
 function filterFiles(req: LinxFileUploadRequest, file: Express.Multer.File, callback: FileFilterCallback) {
-    callback(null, !fileHashSet.has(req.body.file_hash));
+    if (fileHashMap.has(req.body.file_hash)) {
+        console.log(fileHashMap);
+        callback(null, false);
+    } else {
+        let linxFile: LinxFile = {
+            file_path: computeFilePath(req, file),
+            file_hash: req.body.file_hash
+        };
+
+        fileHashMap.set(req.body.file_hash, linxFile);
+        console.log(fileHashMap);
+        callback(null, true);
+    }
 }
+
+const storageEngine: StorageEngine = diskStorage({
+    destination: (req, file, callback) => {
+        callback(null, computeFileDestination(req, file));
+    },
+    filename: (req: LinxFileUploadRequest, file, callback) => {
+        callback(null, computeFilename(req, file));
+    }
+});
 
 export default function configure(app: Express) {
     const upload: Multer = multer({ storage: storageEngine, fileFilter: filterFiles });
