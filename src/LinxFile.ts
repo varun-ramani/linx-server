@@ -1,5 +1,6 @@
-type LinxFile = {
+export type LinxFile = {
     file_path: string,
     file_hash: string,
-    file_size: number
+    file_name: string,
+    file_size: number,
 }
